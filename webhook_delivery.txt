@@ -1,0 +1,168 @@
+
+WEBHOOK DELIVERY SERVICE — ASCII FLOW
+======================================
+
+  EXTERNAL SENDER
+       |
+       | POST /webhooks
+       | Headers: x-signature: <hmac>
+       | Body:    { id, event_type, payload, timestamp }
+       v
++-------------------------------+
+|        FastAPI App            |
+|   app/main.py                 |
+|   - /webhooks  (router)       |
+|   - /health    (router)       |
++-------------------------------+
+       |
+       v
++-------------------------------+
+|   receive_webhook()           |
+|   app/routes/webhooks.py      |
++-------------------------------+
+       |
+       |  1. SIGNATURE VERIFICATION
+       v
++-------------------------------+       raises 401
+|  security.verify_signature()  | -------> [401 Unauthorized]
+|  app/core/security.py         |          "Invalid signature"
+|  HMAC-SHA256 check            |
++-------------------------------+
+       |
+       |  (valid signature)
+       |
+       |  2. PARSE & VALIDATE BODY
+       v
++-------------------------------+       parse error
+|  IncomingWebhook(**body_json) | -------> [400 Bad Request]
+|  app/models.py                |          "Invalid JSON"
+|  Fields: id, event_type,      |
+|          payload, timestamp   |
++-------------------------------+
+       |
+       |  (valid body)
+       |
+       |  3. IDEMPOTENCY CHECK
+       v
++-------------------------------+
+|  idempotency.is_duplicate()   |
+|  app/core/idempotency.py      |
+|  Redis key existence check    |
++-------------------------------+
+       |              |
+  [not seen]     [already seen]
+       |              |
+       |              v
+       |         [200 OK]
+       |         "duplicate ignored"
+       |
+       |  4. ENQUEUE TO REDIS
+       v
++-------------------------------+
+|  redis.lpush("webhook_queue") |
+|  app/storage/redis_client.py  |
++-------------------------------+
+       |
+       |  5. MARK AS PROCESSED
+       v
++-------------------------------+
+|  idempotency.mark_processed() |
+|  app/core/idempotency.py      |
+|  Redis SET with TTL           |
+|  TTL default: 86400s (24h)    |
++-------------------------------+
+       |
+       v
+  [202 Accepted]
+  "status: accepted"
+
+
+  =============================================
+  BACKGROUND WORKER (separate process)
+  =============================================
+
+  app/workers/delivery_worker.py
+
+  +-----------------------------+
+  |  Worker starts              |
+  |  connects to Redis          |
+  +-----------------------------+
+            |
+            |  infinite loop (1s poll)
+            v
+  +-----------------------------+
+  |  Dequeue from               |
+  |  "webhook_queue" (BRPOP)    |
+  +-----------------------------+
+            |
+            |  6. ATTEMPT DELIVERY
+            v
+  +-----------------------------+          success
+  |  HTTP POST to target_url    | ---------> DeliveryStatus.DELIVERED
+  |  DeliveryAttempt model      |
+  |  app/models.py              |
+  +-----------------------------+
+            |
+         (failure)
+            |
+            |  7. COMPUTE BACKOFF
+            v
+  +-----------------------------+
+  |  retry.compute_backoff()    |
+  |  app/core/retry.py          |
+  |  Exponential + jitter       |
+  +-----------------------------+
+            |
+            |  8. DLQ DECISION
+            v
+  +-----------------------------+
+  |  retry.should_move_to_dlq() |
+  |  app/core/retry.py          |
+  |  max_retry_attempts: 5      |
+  +-----------------------------+
+            |               |
+    [retries left]    [exhausted]
+            |               |
+            v               v
+  Re-enqueue with     DeliveryStatus.DEAD
+  next_retry_at       push to Dead Letter
+  DeliveryStatus      Queue (DLQ)
+  .RETRYING
+
+
+  =============================================
+  DELIVERY STATUS LIFECYCLE
+  =============================================
+
+    PENDING -----> DELIVERED
+       |
+       +--(fail)--> RETRYING -----> DELIVERED
+                       |
+                  (max retries)
+                       |
+                       v
+                     DEAD  (DLQ)
+
+
+  =============================================
+  INFRASTRUCTURE
+  =============================================
+
+    +------------------+       +------------------+
+    |   FastAPI App    |<----->|      Redis        |
+    |   (Uvicorn)      |       |  - webhook_queue  |
+    |   port: 8000     |       |  - idempotency    |
+    +------------------+       |    keys (TTL 24h) |
+            ^                  +------------------+
+            |                          ^
+    +------------------+               |
+    |  Delivery Worker |---------------+
+    |  (Python proc)   |
+    +------------------+
+
+  Config (via .env / env vars):
+    REDIS_URL              = redis://localhost:6379/0
+    WEBHOOK_SECRET         = <hmac secret>
+    MAX_RETRY_ATTEMPTS     = 5
+    IDEMPOTENCY_TTL_SECONDS= 86400
+    PORT                   = 8000
