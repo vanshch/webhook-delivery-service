@@ -1,6 +1,9 @@
+"""Webhook ingestion route — validates, deduplicates, and enqueues incoming events."""
+
 from fastapi import APIRouter, Request, HTTPException, status, Response
 from loguru import logger
 from app.models import IncomingWebhook
+from app.config import settings
 from app.core import security, idempotency
 from app.storage import redis_client
 
@@ -8,9 +11,9 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(request: Request, response: Response):
+    """Receive an incoming webhook, verify its HMAC signature, deduplicate, and enqueue for delivery."""
     raw_body = await request.body()
     signature_header = request.headers.get("x-signature", "")
-    from app.config import settings
     
     if not security.verify_signature(raw_body, signature_header, settings.webhook_secret):
         logger.warning("Webhook verification failed: Invalid signature")

@@ -1,6 +1,9 @@
+"""Application configuration loaded from environment variables and .env file."""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    """Service configuration with env-based overrides. See .env.example for defaults."""
     redis_url: str = "redis://localhost:6379/0"
     webhook_secret: str = ""
     max_retry_attempts: int = 5

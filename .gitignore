@@ -1,5 +1,35 @@
-.venv
+# Python
+.venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+
+# Environment
 .env
+*.env.local
+
+# Testing
 .pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+tools/
+generate.py
+file_structure.txt
+webhook_delivery.txt
+spec.md

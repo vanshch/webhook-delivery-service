@@ -1,3 +1,5 @@
+"""FastAPI application entry point with request logging middleware."""
+
 import time
 from fastapi import FastAPI, Request
 from loguru import logger
@@ -7,6 +9,7 @@ app = FastAPI(title="Webhook Delivery Service")
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    """Log all incoming requests with timing information."""
     start_time = time.time()
     client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Incoming request: {request.method} {request.url.path} from {client_ip}")

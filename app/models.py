@@ -1,3 +1,5 @@
+"""Pydantic models for webhook events, delivery status, and delivery attempts."""
+
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
