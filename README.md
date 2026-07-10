@@ -26,6 +26,18 @@ flowchart LR
 - **Dead-Letter Queue** — Exhausted deliveries are moved to a DLQ for manual inspection
 - **Concurrent Worker** — Async event loop with semaphore-bounded concurrency (50 concurrent deliveries)
 
+## Performance Benchmarks
+
+The service underwent significant optimizations (transitioning from a blocking architecture to async workers and a proper Redis setup), yielding massive improvements in both ingestion and delivery:
+
+| Stage | Ingestion Throughput | Delivery Throughput | Avg Latency |
+|-------|----------------------|---------------------|-------------|
+| **Initial (Vanilla FastAPI, Blocking I/O)** | ~6.08 RPS | N/A | 1.77s |
+| **Middle (Proper Redis + Sync Worker)** | ~58.76 RPS | ~5 RPS / worker | ~1.70s |
+| **Final (Async I/O, Redis Caching & Async Workers)** | ~184.54 RPS | ~250+ RPS / worker | 52.23ms |
+
+**Impact**: 30x increase in ingestion speed, 50x increase in delivery speed, and a 97% reduction in request latency.
+
 ## Tech Stack
 
 | Component | Technology |
