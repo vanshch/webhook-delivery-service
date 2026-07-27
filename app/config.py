@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     """Service configuration with env-based overrides. See .env.example for defaults."""
     redis_url: str = "redis://localhost:6379/0"
     webhook_secret: str = ""
+    outbound_webhook_secret: str = ""
     max_retry_attempts: int = 5
     idempotency_ttl_seconds: int = 86400
     port: int = 8000

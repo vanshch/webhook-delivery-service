@@ -16,7 +16,11 @@ from app.core import retry
 from app.config import settings
 from app.models import IncomingWebhook
 
-async def deliver_webhook(webhook: IncomingWebhook, target_url: str) -> bool:
+async def deliver_webhook(
+    webhook: IncomingWebhook,
+    target_url: str,
+    client: httpx.AsyncClient,
+) -> bool:
     """Attempt HTTP POST delivery of the webhook to target_url.
     Returns True if successful, False otherwise.
     """
@@ -27,26 +31,37 @@ async def deliver_webhook(webhook: IncomingWebhook, target_url: str) -> bool:
             "payload": webhook.payload,
             "timestamp": webhook.timestamp.isoformat() if webhook.timestamp else None
         }
-        
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
         headers = {"Content-Type": "application/json"}
-        if settings.webhook_secret:
-            body_bytes = json.dumps(payload).encode('utf-8')
-            mac = hmac.new(settings.webhook_secret.encode('utf-8'), msg=body_bytes, digestmod=hashlib.sha256)
+        if settings.outbound_webhook_secret:
+            mac = hmac.new(
+                settings.outbound_webhook_secret.encode("utf-8"),
+                msg=body,
+                digestmod=hashlib.sha256,
+            )
             headers["x-signature"] = f"sha256={mac.hexdigest()}"
-            
-        async with httpx.AsyncClient() as client:
-            response = await client.post(target_url, json=payload, headers=headers, timeout=5.0)
-            if 200 <= response.status_code < 300:
-                logger.info(f"Webhook {webhook.id} successfully delivered to {target_url}")
-                return True
-            else:
-                logger.warning(f"Webhook {webhook.id} delivery to {target_url} returned status {response.status_code}")
-                return False
+
+        response = await client.post(target_url, content=body, headers=headers)
+        if 200 <= response.status_code < 300:
+            logger.info(f"Webhook {webhook.id} successfully delivered to {target_url}")
+            return True
+        else:
+            logger.warning(f"Webhook {webhook.id} delivery to {target_url} returned status {response.status_code}")
+            return False
     except Exception as e:
         logger.error(f"Webhook {webhook.id} delivery failed: {e}")
         return False
 
-async def process_job(redis_conn, job_json: str):
+async def process_job(
+    redis_conn,
+    job_json: str,
+    client: httpx.AsyncClient,
+):
     """Parse job JSON, increment attempt count, deliver, and handle success/retry/DLQ."""
     try:
         data = json.loads(job_json)
@@ -66,7 +81,7 @@ async def process_job(redis_conn, job_json: str):
     attempt_number += 1
 
     logger.info(f"Processing webhook {webhook.id}, attempt #{attempt_number} to {target_url}")
-    success = await deliver_webhook(webhook, target_url)
+    success = await deliver_webhook(webhook, target_url, client)
 
     if success:
         await redis_conn.delete(attempt_key)
@@ -89,10 +104,15 @@ async def process_job(redis_conn, job_json: str):
             await redis_conn.zadd("webhook_delay_queue", {job_json: retry_time})
             logger.info(f"Webhook {webhook.id} scheduled for retry in {backoff_delay:.2f}s (at {retry_time})")
 
-async def run_process_job(redis_conn, job_json: str, semaphore: asyncio.Semaphore):
+async def run_process_job(
+    redis_conn,
+    job_json: str,
+    semaphore: asyncio.Semaphore,
+    client: httpx.AsyncClient,
+):
     """Helper wrapper to ensure the semaphore is released when job processing finishes."""
     try:
-        await process_job(redis_conn, job_json)
+        await process_job(redis_conn, job_json, client)
     except Exception as e:
         logger.error(f"Error processing job: {e}")
     finally:
@@ -121,17 +141,20 @@ async def main():
     
     semaphore = asyncio.Semaphore(50)
     
-    while True:
-        try:
-            # Block and pop new jobs from the queue
-            job = await redis.blpop("webhook_queue", timeout=1)
-            if job:
-                _, job_json = job
-                await semaphore.acquire()
-                asyncio.create_task(run_process_job(redis, job_json, semaphore))
-        except Exception as e:
-            logger.error(f"Worker main loop error: {e}")
-            await asyncio.sleep(1)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        while True:
+            try:
+                # Block and pop new jobs from the queue
+                job = await redis.blpop("webhook_queue", timeout=1)
+                if job:
+                    _, job_json = job
+                    await semaphore.acquire()
+                    asyncio.create_task(
+                        run_process_job(redis, job_json, semaphore, client)
+                    )
+            except Exception as e:
+                logger.error(f"Worker main loop error: {e}")
+                await asyncio.sleep(1)
 
 if __name__ == "__main__":
     try:

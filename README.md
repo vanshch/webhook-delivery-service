@@ -94,7 +94,8 @@ python -m app.workers.delivery_worker
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
-| `WEBHOOK_SECRET` | `""` | HMAC secret for signature verification |
+| `WEBHOOK_SECRET` | `""` | HMAC secret for verifying incoming webhooks |
+| `OUTBOUND_WEBHOOK_SECRET` | `""` | HMAC secret for signing delivered webhooks |
 | `MAX_RETRY_ATTEMPTS` | `5` | Max delivery attempts before moving to DLQ |
 | `IDEMPOTENCY_TTL_SECONDS` | `86400` | How long (seconds) to remember processed webhook IDs |
 | `PORT` | `8000` | API server port |
