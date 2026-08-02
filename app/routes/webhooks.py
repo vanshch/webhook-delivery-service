@@ -33,8 +33,8 @@ async def receive_webhook(request: Request, response: Response):
         return {"status": "duplicate ignored"}
 
     redis = redis_client.get_async_redis()
-    await redis.lpush("webhook_queue", webhook_data.model_dump_json())
-    logger.info(f"Enqueued webhook {webhook_data.id} for processing")
+    await redis.xadd(settings.stream_name, {"payload": webhook_data.model_dump_json()})
+    logger.info(f"Enqueued webhook {webhook_data.id} to stream {settings.stream_name}")
 
     await idempotency.mark_processed(webhook_data.id, settings.idempotency_ttl_seconds)
 

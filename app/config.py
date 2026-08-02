@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     port: int = 8000
     default_target_url: str = "http://httpbin.org/post"
     
+    stream_name: str = "webhook_stream"
+    consumer_group: str = "webhook_workers"
+    quarantine_queue: str = "webhook_quarantine"
+    dlq_key: str = "webhook_dlq"
+    delay_queue_key: str = "webhook_delay_queue"
+    stream_claim_min_idle_ms: int = 60000
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 settings = Settings()

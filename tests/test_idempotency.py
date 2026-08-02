@@ -50,8 +50,8 @@ def test_duplicate_webhook_ignored(client, fake_redis):
     assert response1.status_code == status.HTTP_202_ACCEPTED
     assert response1.json() == {"status": "accepted"}
     
-    # Verify it was enqueued in Redis
-    assert fake_redis.llen("webhook_queue") == 1
+    # Verify it was enqueued in Redis Stream
+    assert fake_redis.xlen(settings.stream_name) == 1
     
     # Send second request with the same ID (should be duplicate ignored)
     response2 = client.post(
@@ -63,4 +63,4 @@ def test_duplicate_webhook_ignored(client, fake_redis):
     assert response2.json() == {"status": "duplicate ignored"}
     
     # Verify no additional items were enqueued
-    assert fake_redis.llen("webhook_queue") == 1
+    assert fake_redis.xlen(settings.stream_name) == 1
