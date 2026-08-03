@@ -5,7 +5,6 @@ from loguru import logger
 from app.models import IncomingWebhook
 from app.config import settings
 from app.core import security, idempotency
-from app.storage import redis_client
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -23,19 +22,27 @@ async def receive_webhook(request: Request, response: Response):
         body_json = await request.json()
         webhook_data = IncomingWebhook(**body_json)
         logger.debug(f"Successfully parsed webhook payload: {webhook_data.id}")
+    except ValueError:
+        logger.warning("Invalid webhook payload")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid webhook payload",
+        )
     except Exception:
         logger.warning("Invalid JSON received in webhook payload")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
 
-    if await idempotency.is_duplicate(webhook_data.id):
+    accepted = await idempotency.deduplicate_and_enqueue(
+        event_id=webhook_data.id,
+        payload_json=webhook_data.model_dump_json(),
+        stream_name=settings.stream_name,
+        ttl_seconds=settings.idempotency_ttl_seconds,
+    )
+
+    if not accepted:
         logger.info(f"Duplicate webhook ignored: {webhook_data.id}")
         response.status_code = status.HTTP_200_OK
         return {"status": "duplicate ignored"}
 
-    redis = redis_client.get_async_redis()
-    await redis.xadd(settings.stream_name, {"payload": webhook_data.model_dump_json()})
     logger.info(f"Enqueued webhook {webhook_data.id} to stream {settings.stream_name}")
-
-    await idempotency.mark_processed(webhook_data.id, settings.idempotency_ttl_seconds)
-
     return {"status": "accepted"}
