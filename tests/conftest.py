@@ -2,7 +2,18 @@ import pytest
 import fakeredis
 from fastapi.testclient import TestClient
 import app.storage.redis_client
+import app.core.target_validation
 from app.main import app as fastapi_app
+
+
+@pytest.fixture(autouse=True)
+def stub_public_dns(monkeypatch):
+    """Keep target-validation tests deterministic and off the public network."""
+    monkeypatch.setattr(
+        app.core.target_validation,
+        "resolve_hostname",
+        lambda hostname, port: ["93.184.216.34"],
+    )
 
 @pytest.fixture
 def fake_redis(monkeypatch):

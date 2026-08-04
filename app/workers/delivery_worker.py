@@ -20,6 +20,7 @@ from app.storage import redis_client
 from app.core import retry
 from app.config import settings
 from app.models import IncomingWebhook
+from app.core.target_validation import validate_delivery_target
 
 # Lua script for atomic promotion of delayed jobs from ZSET to Redis Stream
 PROMOTE_DELAYED_LUA = """
@@ -83,6 +84,18 @@ async def deliver_webhook(
     Returns True if successful, False otherwise.
     """
     try:
+        validated_url = await asyncio.to_thread(
+            validate_delivery_target,
+            target_url,
+            environment=settings.environment,
+            allowed_target_hosts=settings.allowed_target_hosts,
+            max_url_length=settings.max_target_url_length,
+        )
+    except ValueError as e:
+        logger.error(f"Target URL validation failed for webhook {webhook.id}: {e}")
+        return False
+
+    try:
         payload = {
             "id": webhook.id,
             "event_type": webhook.event_type,
@@ -104,12 +117,12 @@ async def deliver_webhook(
             )
             headers["x-signature"] = f"sha256={mac.hexdigest()}"
 
-        response = await client.post(target_url, content=body, headers=headers)
+        response = await client.post(validated_url, content=body, headers=headers, follow_redirects=False)
         if 200 <= response.status_code < 300:
-            logger.info(f"Webhook {webhook.id} successfully delivered to {target_url}")
+            logger.info(f"Webhook {webhook.id} successfully delivered to {validated_url}")
             return True
         else:
-            logger.warning(f"Webhook {webhook.id} delivery to {target_url} returned status {response.status_code}")
+            logger.warning(f"Webhook {webhook.id} delivery to {validated_url} returned status {response.status_code}")
             return False
     except Exception as e:
         logger.error(f"Webhook {webhook.id} delivery failed: {e}")
@@ -145,13 +158,34 @@ async def process_job(
         return
 
     # 2. Validate target URL
-    target_url = webhook.target_url or settings.default_target_url
-    if not target_url:
+    raw_target_url = webhook.target_url or settings.default_target_url
+    if not raw_target_url:
         logger.error(f"No target URL specified for webhook {webhook.id}. Moving to quarantine.")
         quarantine_item = {
             "webhook_id": webhook.id,
             "job": job_json,
             "error": "Missing target URL",
+            "quarantined_at": time.time(),
+        }
+        await redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item))
+        if stream_msg_id:
+            await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
+        return
+
+    try:
+        target_url = await asyncio.to_thread(
+            validate_delivery_target,
+            raw_target_url,
+            environment=settings.environment,
+            allowed_target_hosts=settings.allowed_target_hosts,
+            max_url_length=settings.max_target_url_length,
+        )
+    except ValueError as e:
+        logger.error(f"Target URL validation failed for webhook {webhook.id}: {e}. Moving to quarantine.")
+        quarantine_item = {
+            "webhook_id": webhook.id,
+            "job": job_json,
+            "error": f"Invalid target URL: {e}",
             "quarantined_at": time.time(),
         }
         await redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item))
@@ -324,7 +358,7 @@ class DeliveryWorker:
             poll_delay_queue(redis_conn, settings.delay_queue_key, self.stream_name)
         )
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             while not self.shutdown_event.is_set():
                 try:
                     # 1. Reclaim stale pending jobs from crashed workers
