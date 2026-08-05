@@ -74,3 +74,17 @@ class DeliveryAttempt(BaseModel):
     status: DeliveryStatus = DeliveryStatus.PENDING
     last_error: Optional[str] = None
     next_retry_at: Optional[datetime] = None
+
+class DeliveryState(BaseModel):
+    event_id: str
+    status: DeliveryStatus = DeliveryStatus.PENDING
+    attempt_count: int = 0
+    last_attempt_time: Optional[datetime] = None
+    last_error: Optional[str] = None
+    next_retry_time: Optional[datetime] = None
+    final_delivery_time: Optional[datetime] = None
+
+    @field_validator("event_id")
+    @classmethod
+    def validate_state_event_id(cls, value: str) -> str:
+        return validate_event_id(value)

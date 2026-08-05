@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     delay_queue_key: str = "webhook_delay_queue"
     stream_claim_min_idle_ms: int = 60_000
 
+    worker_heartbeat_key_prefix: str = Field(
+        default="worker:heartbeat", min_length=1, max_length=128
+    )
+    worker_heartbeat_ttl_seconds: int = Field(default=10, gt=0, le=300)
+    worker_heartbeat_interval_seconds: float = Field(default=3.0, gt=0, le=60)
+    delivery_key_prefix: str = Field(default="delivery", min_length=1, max_length=128)
+    cli_admin_key: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @field_validator("environment", mode="before")
@@ -88,6 +96,11 @@ class Settings(BaseSettings):
     def validate_security_configuration(self) -> "Settings":
         if self.max_payload_bytes > self.max_request_body_bytes:
             raise ValueError("max_payload_bytes must not exceed max_request_body_bytes")
+        if self.worker_heartbeat_interval_seconds >= self.worker_heartbeat_ttl_seconds:
+            raise ValueError(
+                "worker_heartbeat_interval_seconds must be shorter than "
+                "worker_heartbeat_ttl_seconds"
+            )
 
         if self.environment != "production":
             return self
@@ -95,6 +108,7 @@ class Settings(BaseSettings):
         for field_name, secret in (
             ("webhook_secret", self.webhook_secret),
             ("outbound_webhook_secret", self.outbound_webhook_secret),
+            ("cli_admin_key", self.cli_admin_key),
         ):
             normalized_secret = (secret or "").strip()
             lowered_secret = normalized_secret.lower()

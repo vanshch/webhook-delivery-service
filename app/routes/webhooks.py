@@ -52,7 +52,7 @@ async def receive_webhook(request: Request, response: Response):
     try:
         body_json = json.loads(raw_body)
         webhook_data = IncomingWebhook(**body_json)
-        logger.debug(f"Successfully parsed webhook payload: {webhook_data.id}")
+        logger.bind(event_id=webhook_data.id).debug("Successfully parsed webhook payload")
     except (ValueError, TypeError):
         logger.warning("Invalid webhook payload")
         raise HTTPException(
@@ -68,9 +68,11 @@ async def receive_webhook(request: Request, response: Response):
     )
 
     if not accepted:
-        logger.info(f"Duplicate webhook ignored: {webhook_data.id}")
+        logger.bind(event_id=webhook_data.id).info("Duplicate webhook ignored")
         response.status_code = status.HTTP_200_OK
         return {"status": "duplicate ignored"}
 
-    logger.info(f"Enqueued webhook {webhook_data.id} to stream {settings.stream_name}")
+    logger.bind(event_id=webhook_data.id).info(
+        f"Enqueued webhook to stream {settings.stream_name}"
+    )
     return {"status": "accepted"}

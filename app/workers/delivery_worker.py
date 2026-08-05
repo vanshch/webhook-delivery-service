@@ -13,14 +13,49 @@ import uuid
 import signal
 import httpx
 import asyncio
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Set, List, Tuple
 from loguru import logger
 from redis.exceptions import ResponseError
 from app.storage import redis_client
 from app.core import retry
 from app.config import settings
-from app.models import IncomingWebhook
+from app.models import IncomingWebhook, DeliveryState, DeliveryStatus
 from app.core.target_validation import validate_delivery_target
+from app.core.delivery_state import save_delivery_state
+
+import inspect
+
+async def _maybe_await(res):
+    if inspect.isawaitable(res):
+        return await res
+    return res
+
+async def record_heartbeat(redis_conn, worker_id: str) -> None:
+    """Write a worker heartbeat key to Redis with configured TTL."""
+    key = f"{settings.worker_heartbeat_key_prefix}:{worker_id}"
+    await _maybe_await(redis_conn.set(key, str(time.time()), ex=settings.worker_heartbeat_ttl_seconds))
+
+async def heartbeat_loop(
+    redis_conn,
+    worker_id: str,
+    shutdown_event: asyncio.Event,
+):
+    """Periodically publish worker heartbeat while the worker process is alive."""
+    key = f"{settings.worker_heartbeat_key_prefix}:{worker_id}"
+    while not shutdown_event.is_set():
+        try:
+            await record_heartbeat(redis_conn, worker_id)
+        except Exception as e:
+            logger.warning(f"Failed to record worker heartbeat for {worker_id}: {e}")
+        try:
+            await asyncio.sleep(settings.worker_heartbeat_interval_seconds)
+        except asyncio.CancelledError:
+            break
+    try:
+        await _maybe_await(redis_conn.delete(key))
+    except Exception:
+        pass
 
 # Lua script for atomic promotion of delayed jobs from ZSET to Redis Stream
 PROMOTE_DELAYED_LUA = """
@@ -195,40 +230,71 @@ async def process_job(
 
     # 3. Track attempt count
     attempt_key = f"attempt:{webhook.id}"
-    attempt_val = await redis_conn.get(attempt_key)
+    attempt_val = await _maybe_await(redis_conn.get(attempt_key))
     attempt_number = int(attempt_val) if attempt_val else 0
     attempt_number += 1
 
-    logger.info(f"Processing webhook {webhook.id}, attempt #{attempt_number} to {target_url}")
-    success = await deliver_webhook(webhook, target_url, client)
+    with logger.contextualize(event_id=webhook.id):
+        logger.info(f"Processing webhook {webhook.id}, attempt #{attempt_number} to {target_url}")
+        success = await deliver_webhook(webhook, target_url, client)
 
-    # 4. Handle delivery result & acknowledge stream message AFTER persistence
-    if success:
-        await redis_conn.delete(attempt_key)
-        if stream_msg_id:
-            await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
-        logger.success(f"Webhook {webhook.id} delivered successfully")
-    else:
-        if retry.should_move_to_dlq(attempt_number, settings.max_retry_attempts):
-            logger.error(f"Webhook {webhook.id} exhausted all {settings.max_retry_attempts} retries. Moving to DLQ.")
-            dlq_item = {
-                "webhook": webhook.model_dump(mode="json"),
-                "last_attempt": attempt_number,
-                "failed_at": time.time(),
-                "target_url": target_url
-            }
-            await redis_conn.lpush(settings.dlq_key, json.dumps(dlq_item))
-            await redis_conn.delete(attempt_key)
+        # 4. Handle delivery result & acknowledge stream message AFTER persistence
+        now = datetime.now(timezone.utc)
+        if success:
+            state = DeliveryState(
+                event_id=webhook.id,
+                status=DeliveryStatus.DELIVERED,
+                attempt_count=attempt_number,
+                last_attempt_time=now,
+                final_delivery_time=now,
+            )
+            await save_delivery_state(redis_conn, state)
+            await _maybe_await(redis_conn.delete(attempt_key))
             if stream_msg_id:
-                await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
+                await _maybe_await(redis_conn.xack(stream_name, consumer_group, stream_msg_id))
+            logger.success(f"Webhook {webhook.id} delivered successfully")
         else:
-            backoff_delay = retry.compute_backoff(attempt_number)
-            await redis_conn.set(attempt_key, str(attempt_number))
-            retry_time = time.time() + backoff_delay
-            await redis_conn.zadd(settings.delay_queue_key, {job_json: retry_time})
-            if stream_msg_id:
-                await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
-            logger.info(f"Webhook {webhook.id} scheduled for retry in {backoff_delay:.2f}s (at {retry_time})")
+            if retry.should_move_to_dlq(attempt_number, settings.max_retry_attempts):
+                logger.error(f"Webhook {webhook.id} exhausted all {settings.max_retry_attempts} retries. Moving to DLQ.")
+                err_msg = f"Delivery failed after {attempt_number} attempts"
+                state = DeliveryState(
+                    event_id=webhook.id,
+                    status=DeliveryStatus.DEAD,
+                    attempt_count=attempt_number,
+                    last_attempt_time=now,
+                    last_error=err_msg,
+                )
+                await save_delivery_state(redis_conn, state)
+                dlq_item = {
+                    "webhook": webhook.model_dump(mode="json"),
+                    "last_attempt": attempt_number,
+                    "failed_at": time.time(),
+                    "target_url": target_url,
+                    "last_error": err_msg,
+                }
+                await _maybe_await(redis_conn.lpush(settings.dlq_key, json.dumps(dlq_item)))
+                await _maybe_await(redis_conn.delete(attempt_key))
+                if stream_msg_id:
+                    await _maybe_await(redis_conn.xack(stream_name, consumer_group, stream_msg_id))
+            else:
+                backoff_delay = retry.compute_backoff(attempt_number)
+                err_msg = f"Delivery attempt {attempt_number} failed"
+                next_retry_dt = now + timedelta(seconds=backoff_delay)
+                state = DeliveryState(
+                    event_id=webhook.id,
+                    status=DeliveryStatus.RETRYING,
+                    attempt_count=attempt_number,
+                    last_attempt_time=now,
+                    last_error=err_msg,
+                    next_retry_time=next_retry_dt,
+                )
+                await save_delivery_state(redis_conn, state)
+                await _maybe_await(redis_conn.set(attempt_key, str(attempt_number)))
+                retry_time = time.time() + backoff_delay
+                await _maybe_await(redis_conn.zadd(settings.delay_queue_key, {job_json: retry_time}))
+                if stream_msg_id:
+                    await _maybe_await(redis_conn.xack(stream_name, consumer_group, stream_msg_id))
+                logger.info(f"Webhook {webhook.id} scheduled for retry in {backoff_delay:.2f}s (at {retry_time})")
 
 async def promote_delayed_jobs(
     redis_conn,
@@ -353,9 +419,12 @@ class DeliveryWorker:
         await ensure_consumer_group(redis_conn, self.stream_name, self.consumer_group)
         logger.info(f"Worker {self.worker_id} started, listening on stream {self.stream_name}...")
 
-        # Start background delay queue poller
+        # Start background delay queue poller and worker heartbeat
         poller_task = asyncio.create_task(
             poll_delay_queue(redis_conn, settings.delay_queue_key, self.stream_name)
+        )
+        hb_task = asyncio.create_task(
+            heartbeat_loop(redis_conn, self.worker_id, self.shutdown_event)
         )
 
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
@@ -412,8 +481,13 @@ class DeliveryWorker:
 
             # Graceful shutdown: wait for in-flight tasks to complete before closing HTTP client
             poller_task.cancel()
+            hb_task.cancel()
             try:
                 await poller_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await hb_task
             except asyncio.CancelledError:
                 pass
 
