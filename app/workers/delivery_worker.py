@@ -513,7 +513,7 @@ async def run_process_job(
 
 async def main():
     redis_conn = redis_client.get_async_redis()
-    worker = DeliveryWorker()
+    worker = DeliveryWorker(concurrency=settings.worker_concurrency)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     )
     worker_heartbeat_ttl_seconds: int = Field(default=10, gt=0, le=300)
     worker_heartbeat_interval_seconds: float = Field(default=3.0, gt=0, le=60)
+    worker_concurrency: int = Field(default=8, gt=0, le=100)
     delivery_key_prefix: str = Field(default="delivery", min_length=1, max_length=128)
     cli_admin_key: str = ""
 
