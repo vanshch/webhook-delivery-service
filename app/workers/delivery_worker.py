@@ -78,6 +78,33 @@ end
 return moved
 """
 
+# Lua script for atomic acknowledgement and deletion of completed stream messages
+ACK_AND_DELETE_LUA = """
+local stream_name = KEYS[1]
+local consumer_group = ARGV[1]
+local msg_id = ARGV[2]
+
+local acked = redis.call('XACK', stream_name, consumer_group, msg_id)
+if acked == 1 then
+    return redis.call('XDEL', stream_name, msg_id)
+end
+return 0
+"""
+
+async def acknowledge_and_delete(
+    redis_conn,
+    stream_name: str,
+    consumer_group: str,
+    msg_id: str,
+) -> int:
+    """Atomically acknowledge and delete a stream message if acknowledged."""
+    if not msg_id:
+        return 0
+    res = await _maybe_await(
+        redis_conn.eval(ACK_AND_DELETE_LUA, 1, stream_name, consumer_group, str(msg_id))
+    )
+    return int(res) if res is not None else 0
+
 def generate_worker_id() -> str:
     """Generate a stable unique worker identifier."""
     return f"worker-{uuid.uuid4().hex[:8]}"
@@ -187,9 +214,9 @@ async def process_job(
             "error": str(e),
             "quarantined_at": time.time(),
         }
-        await redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item))
+        await _maybe_await(redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item)))
         if stream_msg_id:
-            await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
+            await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
         return
 
     # 2. Validate target URL
@@ -202,9 +229,9 @@ async def process_job(
             "error": "Missing target URL",
             "quarantined_at": time.time(),
         }
-        await redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item))
+        await _maybe_await(redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item)))
         if stream_msg_id:
-            await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
+            await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
         return
 
     try:
@@ -223,9 +250,9 @@ async def process_job(
             "error": f"Invalid target URL: {e}",
             "quarantined_at": time.time(),
         }
-        await redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item))
+        await _maybe_await(redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item)))
         if stream_msg_id:
-            await redis_conn.xack(stream_name, consumer_group, stream_msg_id)
+            await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
         return
 
     # 3. Track attempt count
@@ -251,7 +278,7 @@ async def process_job(
             await save_delivery_state(redis_conn, state)
             await _maybe_await(redis_conn.delete(attempt_key))
             if stream_msg_id:
-                await _maybe_await(redis_conn.xack(stream_name, consumer_group, stream_msg_id))
+                await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
             logger.success(f"Webhook {webhook.id} delivered successfully")
         else:
             if retry.should_move_to_dlq(attempt_number, settings.max_retry_attempts):
@@ -275,7 +302,7 @@ async def process_job(
                 await _maybe_await(redis_conn.lpush(settings.dlq_key, json.dumps(dlq_item)))
                 await _maybe_await(redis_conn.delete(attempt_key))
                 if stream_msg_id:
-                    await _maybe_await(redis_conn.xack(stream_name, consumer_group, stream_msg_id))
+                    await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
             else:
                 backoff_delay = retry.compute_backoff(attempt_number)
                 err_msg = f"Delivery attempt {attempt_number} failed"
@@ -293,7 +320,7 @@ async def process_job(
                 retry_time = time.time() + backoff_delay
                 await _maybe_await(redis_conn.zadd(settings.delay_queue_key, {job_json: retry_time}))
                 if stream_msg_id:
-                    await _maybe_await(redis_conn.xack(stream_name, consumer_group, stream_msg_id))
+                    await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
                 logger.info(f"Webhook {webhook.id} scheduled for retry in {backoff_delay:.2f}s (at {retry_time})")
 
 async def promote_delayed_jobs(
@@ -466,11 +493,18 @@ class DeliveryWorker:
                                 else:
                                     # Malformed stream entry fields
                                     logger.error(f"Malformed stream entry {msg_id}: missing job json")
-                                    await redis_conn.lpush(
-                                        settings.quarantine_queue,
-                                        json.dumps({"msg_id": msg_id, "fields": fields, "error": "Missing payload"}),
+                                    await _maybe_await(
+                                        redis_conn.lpush(
+                                            settings.quarantine_queue,
+                                            json.dumps({"msg_id": msg_id, "fields": fields, "error": "Missing payload"}),
+                                        )
                                     )
-                                    await redis_conn.xack(self.stream_name, self.consumer_group, msg_id)
+                                    await acknowledge_and_delete(
+                                        redis_conn,
+                                        self.stream_name,
+                                        self.consumer_group,
+                                        msg_id,
+                                    )
                     else:
                         await asyncio.sleep(0.01)
 
