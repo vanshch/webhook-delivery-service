@@ -73,7 +73,7 @@ jobs:
       DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
       DEPLOY_USER: ${{ vars.DEPLOY_USER }}
       DEPLOY_DOMAIN: ${{ vars.DEPLOY_DOMAIN }}
-      SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
+      SSH_KEY_FILE: /tmp/webhook-delivery-deploy-key
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
