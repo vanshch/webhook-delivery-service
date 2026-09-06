@@ -15,6 +15,7 @@ from app.workers.delivery_worker import (
     ensure_consumer_group,
     promote_delayed_jobs,
     reclaim_stale_pending_jobs,
+    acknowledge_and_delete,
     DeliveryWorker,
 )
 from app.models import IncomingWebhook
@@ -303,9 +304,10 @@ async def test_crash_before_ack_reclaim(fake_redis, mock_httpx):
     # Verify message is no longer pending
     pending_after = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending_after) == 0
+    assert await async_redis.xlen(settings.stream_name) == 0
 
 @pytest.mark.asyncio
-async def test_successful_ack_removes_from_pel(fake_redis, mock_httpx):
+async def test_successful_processing_removes_entry_from_stream(fake_redis, mock_httpx):
     from app.storage.redis_client import get_async_redis
     async_redis = get_async_redis()
     mock_httpx.post.return_value = httpx.Response(status_code=200)
@@ -317,22 +319,105 @@ async def test_successful_ack_removes_from_pel(fake_redis, mock_httpx):
     msg_id = await async_redis.xadd(settings.stream_name, {"payload": job_json})
     await async_redis.xreadgroup(settings.consumer_group, "worker-1", {settings.stream_name: ">"}, count=1)
 
-    original_xack = async_redis.xack
-
-    async def execute_xack(*args, **kwargs):
-        return await original_xack(*args, **kwargs)
-
-    with patch.object(async_redis, "xack", AsyncMock(side_effect=execute_xack)) as xack:
-        await process_job(async_redis, job_json, mock_httpx, stream_msg_id=msg_id)
-
-    xack.assert_awaited_once_with(
-        settings.stream_name,
-        settings.consumer_group,
-        msg_id,
-    )
+    await process_job(async_redis, job_json, mock_httpx, stream_msg_id=msg_id)
 
     pending = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending) == 0
+    assert await async_redis.xlen(settings.stream_name) == 0
+
+@pytest.mark.asyncio
+async def test_acknowledge_and_delete_preserves_other_pending_entries(fake_redis):
+    from app.storage.redis_client import get_async_redis
+    async_redis = get_async_redis()
+
+    await ensure_consumer_group(async_redis, settings.stream_name, settings.consumer_group)
+    first_id = await async_redis.xadd(settings.stream_name, {"payload": "first"})
+    second_id = await async_redis.xadd(settings.stream_name, {"payload": "second"})
+    await async_redis.xreadgroup(
+        settings.consumer_group,
+        "worker-1",
+        {settings.stream_name: ">"},
+        count=2,
+    )
+
+    removed = await acknowledge_and_delete(
+        async_redis,
+        settings.stream_name,
+        settings.consumer_group,
+        first_id,
+    )
+
+    assert removed == 1
+    pending = await async_redis.xpending_range(
+        settings.stream_name,
+        settings.consumer_group,
+        min="-",
+        max="+",
+        count=10,
+    )
+    assert [item["message_id"] for item in pending] == [second_id]
+    assert await async_redis.xrange(settings.stream_name) == [
+        (second_id, {"payload": "second"})
+    ]
+
+@pytest.mark.asyncio
+async def test_acknowledge_and_delete_failure_keeps_entry_reclaimable(fake_redis):
+    from app.storage.redis_client import get_async_redis
+    async_redis = get_async_redis()
+
+    await ensure_consumer_group(async_redis, settings.stream_name, settings.consumer_group)
+    msg_id = await async_redis.xadd(settings.stream_name, {"payload": "job"})
+    await async_redis.xreadgroup(
+        settings.consumer_group,
+        "worker-1",
+        {settings.stream_name: ">"},
+        count=1,
+    )
+
+    with patch.object(async_redis, "eval", AsyncMock(side_effect=RuntimeError("redis unavailable"))):
+        with pytest.raises(RuntimeError, match="redis unavailable"):
+            await acknowledge_and_delete(
+                async_redis,
+                settings.stream_name,
+                settings.consumer_group,
+                msg_id,
+            )
+
+    pending = await async_redis.xpending_range(
+        settings.stream_name,
+        settings.consumer_group,
+        min="-",
+        max="+",
+        count=10,
+    )
+    assert [item["message_id"] for item in pending] == [msg_id]
+    assert await async_redis.xlen(settings.stream_name) == 1
+
+@pytest.mark.asyncio
+async def test_successful_delivery_stream_length_remains_bounded(fake_redis, mock_httpx):
+    from app.storage.redis_client import get_async_redis
+    async_redis = get_async_redis()
+    mock_httpx.post.return_value = httpx.Response(status_code=200)
+
+    await ensure_consumer_group(async_redis, settings.stream_name, settings.consumer_group)
+    for index in range(25):
+        webhook = IncomingWebhook(
+            id=f"bounded-{index}",
+            event_type="test",
+            payload={"index": index},
+            target_url="http://example.com/target",
+        )
+        job_json = webhook.model_dump_json()
+        msg_id = await async_redis.xadd(settings.stream_name, {"payload": job_json})
+        await async_redis.xreadgroup(
+            settings.consumer_group,
+            "worker-1",
+            {settings.stream_name: ">"},
+            count=1,
+        )
+        await process_job(async_redis, job_json, mock_httpx, stream_msg_id=msg_id)
+
+    assert await async_redis.xlen(settings.stream_name) == 0
 
 @pytest.mark.asyncio
 async def test_retry_persistence_before_ack(fake_redis, mock_httpx):
@@ -357,6 +442,7 @@ async def test_retry_persistence_before_ack(fake_redis, mock_httpx):
     # Verify ACK succeeded
     pending = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending) == 0
+    assert await async_redis.xlen(settings.stream_name) == 0
 
 @pytest.mark.asyncio
 async def test_retry_persistence_failure_keeps_message_pending(fake_redis, mock_httpx):
@@ -376,6 +462,7 @@ async def test_retry_persistence_failure_keeps_message_pending(fake_redis, mock_
 
     pending = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending) == 1
+    assert await async_redis.xlen(settings.stream_name) == 1
 
 @pytest.mark.asyncio
 async def test_dlq_persistence_before_ack(fake_redis, mock_httpx):
@@ -399,6 +486,7 @@ async def test_dlq_persistence_before_ack(fake_redis, mock_httpx):
     # Verify ACK succeeded
     pending = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending) == 0
+    assert await async_redis.xlen(settings.stream_name) == 0
 
 @pytest.mark.asyncio
 async def test_dlq_persistence_failure_keeps_message_pending(fake_redis, mock_httpx):
@@ -419,6 +507,7 @@ async def test_dlq_persistence_failure_keeps_message_pending(fake_redis, mock_ht
 
     pending = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending) == 1
+    assert await async_redis.xlen(settings.stream_name) == 1
 
 @pytest.mark.asyncio
 async def test_malformed_job_quarantine(fake_redis, mock_httpx):
@@ -441,6 +530,7 @@ async def test_malformed_job_quarantine(fake_redis, mock_httpx):
     # Verify message ACKed
     pending = await async_redis.xpending_range(settings.stream_name, settings.consumer_group, min="-", max="+", count=10)
     assert len(pending) == 0
+    assert await async_redis.xlen(settings.stream_name) == 0
 
 @pytest.mark.asyncio
 async def test_atomic_delayed_promotion(fake_redis):

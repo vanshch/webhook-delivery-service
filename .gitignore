@@ -33,3 +33,8 @@ generate.py
 file_structure.txt
 webhook_delivery.txt
 spec.md
+
+# Local implementation guidance (not part of the public repository)
+COMMIT_ROADMAP.md
+AGENTS.md
+context.md

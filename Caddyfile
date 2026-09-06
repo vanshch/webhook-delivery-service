@@ -1,0 +1,17 @@
+{
+    admin off
+}
+
+{$DOMAIN} {
+    request_body {
+        max_size 1MB
+    }
+
+    handle_path /_smoke-receiver/* {
+        reverse_proxy receiver:9090
+    }
+
+    handle {
+        reverse_proxy api:8000
+    }
+}

@@ -41,5 +41,85 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Validate deployment metadata
+      env:
+        DOMAIN: example.com
+        REDIS_TLS_DIR: /etc/webhook-delivery/redis-tls
+        OUTBOUND_WEBHOOK_SECRET: ci-only-outbound-value
+        SMOKE_CONTROL_SECRET: ci-only-control-value
+      run: |
+        touch .env
+        docker compose config --quiet
+        docker run --rm -e DOMAIN=example.com \
+          -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+          caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile
     - name: Build Docker image
       run: docker build -t webhook-delivery-service .
+
+  deploy:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      vars.DEPLOY_ENABLED == 'true'
+    environment:
+      name: production
+      url: https://${{ vars.DEPLOY_DOMAIN }}
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_DOMAIN: ${{ vars.DEPLOY_DOMAIN }}
+      SSH_KEY_FILE: /tmp/webhook-delivery-deploy-key
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: pip
+    - name: Install smoke-test dependencies
+      run: pip install -r requirements.txt
+    - name: Validate deployment inputs
+      run: |
+        [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+        [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+        [[ "$DEPLOY_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]
+        bash -n scripts/bootstrap_host.sh
+        bash -n scripts/deploy.sh
+    - name: Configure SSH
+      env:
+        DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      run: |
+        test -n "$DEPLOY_SSH_KEY"
+        test -n "$DEPLOY_KNOWN_HOSTS"
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$DEPLOY_SSH_KEY" > "$SSH_KEY_FILE"
+        chmod 600 "$SSH_KEY_FILE"
+        printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
+    - name: Deploy tested commit
+      run: |
+        ssh -i "$SSH_KEY_FILE" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+          "cd /opt/webhook_delivery && git fetch --quiet origin '$GITHUB_SHA' && git checkout --detach '$GITHUB_SHA' && ./scripts/deploy.sh"
+    - name: Start controlled receiver
+      run: |
+        ssh -i "$SSH_KEY_FILE" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+          "cd /opt/webhook_delivery && docker compose --profile smoke up -d --no-build receiver"
+    - name: Run public end-to-end smoke test
+      env:
+        API_URL: https://${{ vars.DEPLOY_DOMAIN }}
+        RECEIVER_URL: https://${{ vars.DEPLOY_DOMAIN }}/_smoke-receiver
+        WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        SMOKE_CONTROL_SECRET: ${{ secrets.SMOKE_CONTROL_SECRET }}
+      run: python scripts/smoke_test.py --timeout 120
+    - name: Stop controlled receiver
+      if: always()
+      run: |
+        if [ -f "$SSH_KEY_FILE" ]; then
+          ssh -i "$SSH_KEY_FILE" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd /opt/webhook_delivery && docker compose --profile smoke stop receiver && docker compose --profile smoke rm -f receiver"
+        fi

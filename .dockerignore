@@ -10,7 +10,8 @@ htmlcov
 tests/
 tools/
 demo/
-scripts/
+scripts/*
+!scripts/controlled_receiver.py
 *.md
 !README.md
 .github/

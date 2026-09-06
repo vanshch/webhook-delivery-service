@@ -209,6 +209,7 @@ def production_settings(**overrides):
         "environment": "production",
         "webhook_secret": "i" * 32,
         "outbound_webhook_secret": "o" * 32,
+        "cli_admin_key": "a" * 32,
         "allowed_target_hosts": ["receiver.example"],
     }
     values.update(overrides)
@@ -221,6 +222,7 @@ def production_settings(**overrides):
         ({"webhook_secret": ""}, "webhook_secret"),
         ({"webhook_secret": "change_me"}, "webhook_secret"),
         ({"outbound_webhook_secret": "your_outbound_secret_here"}, "outbound_webhook_secret"),
+        ({"cli_admin_key": ""}, "cli_admin_key"),
         (
             {"webhook_secret": "s" * 32, "outbound_webhook_secret": "s" * 32},
             "must be separate",
