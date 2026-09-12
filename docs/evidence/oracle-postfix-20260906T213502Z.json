@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0",
+  "run_id": "oracle-postfix-20260906T213502Z",
+  "summary_type": "audited_production_soak_summary",
+  "deployed_sha": "7b56b44a4d2e742df0c63341b80e02681f1ad69b",
+  "target": {
+    "base_url": "https://130-210-1-239.sslip.io",
+    "readyz_url": "https://130-210-1-239.sslip.io/readyz",
+    "docs_url": "https://130-210-1-239.sslip.io/docs",
+    "environment": "production",
+    "platform": "Oracle Cloud x86 Ubuntu LTS",
+    "host_memory_total_mib": 954
+  },
+  "time_window": {
+    "started_at_utc": "2026-09-06T21:35:05Z",
+    "ended_at_utc": "2026-09-07T21:38:43Z",
+    "duration_workload_seconds": 86400
+  },
+  "workload": {
+    "total_cycles": 288,
+    "cycle_interval_seconds": 300,
+    "burst_size_per_cycle": 100,
+    "worker_concurrency": 8,
+    "request_payload": {
+      "event_type": "soak.delivery",
+      "payload_shape": {
+        "source": "oracle-soak",
+        "index": "integer from 0 through 99"
+      },
+      "request_body_bytes": null,
+      "size_note": "Exact serialized request-body size was not retained in the audited summary; it varied with the event ID, index, and receiver URL."
+    },
+    "events_requested": 28800,
+    "events_accepted": 28800,
+    "events_delivered": 28800,
+    "events_pending_at_end": 0,
+    "smoke_test_passes": 288,
+    "smoke_test_failures": 0,
+    "host_samples_recorded": 282
+  },
+  "health_and_reliability": {
+    "failed_cycles": 0,
+    "oom_kills": 0,
+    "unexpected_restarts": 0,
+    "readiness_failures": 0,
+    "dlq_events": 0,
+    "quarantine_events": 0
+  },
+  "latency_metrics": {
+    "metric_definitions": {
+      "cycle_mean_ingest_ms_average": "Arithmetic average across all 288 cycles of each cycle's mean POST /webhooks ingest response latency.",
+      "cycle_p95_ingest_ms_average": "Arithmetic average across all 288 cycles of each cycle's 95th percentile POST /webhooks ingest response latency.",
+      "scope_note": "These metrics measure API ingest response latency only (POST /webhooks -> 202 Accepted). They do not measure end-to-end delivery percentiles to the target receiver."
+    },
+    "burst_ingest_latency_ms": {
+      "cycle_mean_average": 48.19,
+      "cycle_p95_average": 165.79
+    }
+  },
+  "resources": {
+    "host_ram_mib": {
+      "start": 516,
+      "peak": 621,
+      "end": 587,
+      "total_available": 954
+    },
+    "host_swap_mib": {
+      "start": 214,
+      "min": 212,
+      "peak": 265,
+      "end": 258
+    },
+    "redis_memory_mb": {
+      "start": 1.81,
+      "peak": 25.07,
+      "end": 17.23
+    },
+    "queues": {
+      "stream_length_peak": 24,
+      "stream_length_end": 1,
+      "pending_peak": 11,
+      "pending_end": 0,
+      "delayed_end": 0,
+      "dlq_end": 0,
+      "quarantine_end": 0
+    },
+    "storage": {
+      "redis_aof_end_mb": 61.68,
+      "redis_volume_end_mb": 68.0,
+      "container_logs_end_mb": 56.0
+    }
+  },
+  "provenance": {
+    "runner_scripts": [
+      "scripts/soak_workload.py",
+      "scripts/collect_soak_evidence.sh",
+      "scripts/smoke_test.py"
+    ],
+    "raw_evidence_vm_path": "/opt/webhook-soak-runs/oracle-postfix-20260906T213502Z",
+    "raw_evidence_status": "Raw cycle outputs and host sample logs are retained on the production VM at /opt/webhook-soak-runs/oracle-postfix-20260906T213502Z but are not committed to source control."
+  },
+  "limitations": [
+    "This JSON document is an audited summary of the completed 24-hour production soak run, not raw per-cycle output.",
+    "Latency values represent API burst-ingest latency (POST /webhooks response time) averaged across cycles; this summary does not supply global end-to-end delivery percentiles or p50/p99 delivery latencies.",
+    "Exact serialized request-body byte size was not retained, so no payload-size-specific performance claim is made.",
+    "Raw cycle outputs and host sample logs are retained on the production VM at /opt/webhook-soak-runs/oracle-postfix-20260906T213502Z and are not committed to the repository."
+  ]
+}
