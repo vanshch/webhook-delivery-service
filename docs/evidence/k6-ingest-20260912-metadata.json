@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "local-k6-ingest-20260912T122546Z",
+  "scope": "Signed POST /webhooks ingestion through atomic Redis Stream enqueueing; no delivery worker was running.",
+  "git_sha": "7b56b44a4d2e742df0c63341b80e02681f1ad69b",
+  "time_window_utc": {
+    "started_at": "2026-09-12T12:25:46Z",
+    "ended_at": "2026-09-12T12:26:16Z",
+    "duration_seconds": 30.0010634
+  },
+  "machine": {
+    "manufacturer": "LENOVO",
+    "model": "82XV",
+    "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+    "physical_cores": 10,
+    "logical_processors": 16,
+    "physical_memory_bytes": 16961822720,
+    "operating_system": "Microsoft Windows 11 Home Single Language 10.0.26200 64-bit"
+  },
+  "runtime": {
+    "python": "3.12.0",
+    "k6": "2.1.0 commit 83a87a41e2, windows/amd64",
+    "redis": "7.0.15 in WSL, database 15",
+    "api": "Uvicorn on 127.0.0.1:8000 with application/access logs suppressed",
+    "worker_concurrency": 0
+  },
+  "load_profile": {
+    "virtual_users_max": 50,
+    "stages": [
+      {"duration_seconds": 5, "target_virtual_users": 50},
+      {"duration_seconds": 20, "target_virtual_users": 50},
+      {"duration_seconds": 5, "target_virtual_users": 0}
+    ],
+    "payload_bytes": {
+      "minimum": 166,
+      "average": 172.11630890698248,
+      "median": 173,
+      "maximum": 173
+    }
+  },
+  "results": {
+    "requests": 20265,
+    "accepted_202": 20265,
+    "failed_requests": 0,
+    "error_rate": 0,
+    "ingestion_throughput_requests_per_second": 675.4760566253794,
+    "ingestion_latency_ms": {
+      "average": 40.8111322674564,
+      "p50": 40.0017,
+      "p95": 74.897,
+      "p99": 273.14000800000025,
+      "maximum": 543.3008
+    },
+    "thresholds_passed": [
+      "checks rate == 1",
+      "http_req_failed rate == 0",
+      "http_req_duration p95 < 100 ms"
+    ],
+    "confirmed_delivery_throughput_requests_per_second": null
+  },
+  "artifacts": {
+    "raw_k6_summary": "docs/evidence/k6-ingest-20260912-summary.json",
+    "test_script": "tests/k6_stress_test.js",
+    "runner": "scripts/run_stress_test.ps1"
+  },
+  "limitations": [
+    "This is one local development-machine run, not a production capacity guarantee.",
+    "The benchmark covers ingestion and Redis Stream enqueueing only; it does not run the worker or measure confirmed delivery throughput.",
+    "Latency is local HTTP response latency and excludes internet, TLS, retry, and receiver-delivery time.",
+    "The production soak artifact separately verifies confirmed delivery, retry recovery, and bounded resource behavior under its scheduled workload."
+  ]
+}
