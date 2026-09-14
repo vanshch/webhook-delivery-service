@@ -53,6 +53,16 @@ docker compose --profile smoke stop receiver
 docker compose --profile smoke rm -f receiver
 ```
 
+## Operational verification & acceptance bar
+
+Deployment claims distinguish historically verified deployment evidence from current live availability. The service is never assumed or claimed to be healthy unless freshly verified.
+
+Calling the service currently deployed requires three checks:
+
+1. **Public HTTPS with a broadly trusted certificate**: The public domain or hostname (e.g. `https://${DOMAIN}`) is accessible over HTTPS with a valid certificate from a broadly trusted certificate authority.
+2. **/readyz healthy**: The `/readyz` endpoint returns HTTP 200 (`{"status": "ok", ...}`), verifying private TLS Redis connectivity and active worker heartbeat.
+3. **Fresh end-to-end smoke test**: Successfully running `scripts/smoke_test.py` to prove signed ingest, delivery, outbound HMAC validation, duplicate suppression, and retry recovery.
+
 ## GitHub deployment automation
 
 The repository includes continuous deployment automation in `.github/workflows/ci.yml` under the `deploy` job:
@@ -61,11 +71,11 @@ The repository includes continuous deployment automation in `.github/workflows/c
 - **Environment**: Configured via the protected `production` environment with variables `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_DOMAIN`.
 - **Secrets**: Requires `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `WEBHOOK_SECRET`, and `SMOKE_CONTROL_SECRET`. `DEPLOY_KNOWN_HOSTS` must contain the VM's verified host key; dynamic `ssh-keyscan` is not permitted in CI.
 - **Workflow Steps**: Deploys the tested commit SHA, verifies readiness, starts the temporary smoke receiver, runs the full public smoke test, and removes the smoke receiver.
-- **Status**: The production soak run was verified on a live host deployed at SHA `7b56b44a4d2e742df0c63341b80e02681f1ad69b`. Automated CD remains opt-in and disabled by default until repository variables and secrets are configured.
+- **Status**: GitHub automated CD is currently disabled and is operational polish rather than a prerequisite for a manual deployment. Manual deployments are executed and verified via `./scripts/deploy.sh` and `scripts/smoke_test.py`. Historical evidence, including the 24-hour soak run at deployed SHA `7b56b44a4d2e742df0c63341b80e02681f1ad69b`, reflects verified manual deployment execution, but current health is not claimed unless freshly verified against these deployment checks.
 
 ## Verified Soak Acceptance Evidence
 
-A 24-hour continuous production soak test was executed on the Oracle Cloud VM to validate memory stability, queue draining, crash recovery, and sustained delivery.
+This section records historical evidence from the continuous 24-hour production soak test executed on the Oracle Cloud VM to validate memory stability, queue draining, crash recovery, and sustained delivery.
 
 ### Run Summary
 

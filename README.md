@@ -8,13 +8,23 @@ A resilient webhook ingestion and delivery engine built with **FastAPI**, **Redi
 
 ---
 
-## Live Production Deployment
+## Deployment Status & Verification Bar
 
-The service is deployed on a dedicated single-host VM on **Oracle Cloud** (x86_64 Ubuntu LTS, 954 MiB RAM, 2 GB swap) behind Caddy with automatic TLS and private TLS Redis.
+The deployment target architecture is a dedicated single-host VM on **Oracle Cloud** (x86_64 Ubuntu LTS, 954 MiB RAM, 2 GB swap) behind Caddy with automatic TLS and private TLS Redis.
 
-| Resource | URL | Description |
+To distinguish historically verified deployment evidence from current live availability, the service is not claimed as currently live or healthy unless freshly verified. Calling the service currently deployed requires three checks:
+
+1. **Public HTTPS with a broadly trusted certificate** resolving to the deployed endpoint.
+2. **/readyz healthy**: Returning HTTP 200 to confirm active Redis connectivity and worker heartbeat.
+3. **Fresh end-to-end smoke test**: Successfully executing `scripts/smoke_test.py` to prove signed ingest, delivery, outbound HMAC, duplicate suppression, and retry recovery.
+
+GitHub automated CD is currently disabled and is operational polish rather than a prerequisite for a manual deployment. Deployments are executed and verified manually following [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+Historical deployment stability was established in a verified 24-hour production soak run (see [Verified 24-Hour Production Soak Evidence](#verified-24-hour-production-soak-evidence)), but historical evidence is kept separate from claims of current availability.
+
+| Resource | Target Endpoint / URL | Description |
 |---|---|---|
-| **Live Base URL** | [https://130-210-1-239.sslip.io](https://130-210-1-239.sslip.io) | Public HTTPS API |
+| **Deployment Base URL** | [https://130-210-1-239.sslip.io](https://130-210-1-239.sslip.io) | Target public HTTPS API |
 | **Interactive Docs** | [https://130-210-1-239.sslip.io/docs](https://130-210-1-239.sslip.io/docs) | OpenAPI / Swagger UI |
 | **Readiness Probe** | [https://130-210-1-239.sslip.io/readyz](https://130-210-1-239.sslip.io/readyz) | Verifies Redis connectivity & worker heartbeat |
 | **Liveness Probe** | [https://130-210-1-239.sslip.io/livez](https://130-210-1-239.sslip.io/livez) | Process liveness probe |
@@ -79,7 +89,7 @@ flowchart TD
 - Target URLs are validated against private, loopback, multicast, and link-local IP spaces. In production, outbound requests are strictly restricted to hostnames listed in `ALLOWED_TARGET_HOSTS`.
 
 ### Known Limitations
-- Redis, the API, and the worker currently share one VM; the deployment has persistence and restart policies but no cross-host high availability.
+- In the historically verified deployment configuration, Redis, the API, and the worker share a single VM; the deployment has persistence and restart policies but no cross-host high availability.
 - Concurrent workers do not guarantee that receivers observe events in ingestion order.
 - All non-2xx responses are retried, including permanent 4xx responses; exhausted events require DLQ inspection or replay.
 - Idempotency claims and delivery-status records expire after `IDEMPOTENCY_TTL_SECONDS` (24 hours by default).
@@ -111,7 +121,7 @@ flowchart TD
 
 ## Verified 24-Hour Production Soak Evidence
 
-A continuous 24-hour production soak run was conducted against the live Oracle Cloud deployment (`https://130-210-1-239.sslip.io`) at deployed SHA `7b56b44a4d2e742df0c63341b80e02681f1ad69b`.
+A continuous 24-hour production soak run was conducted against the Oracle Cloud deployment (`https://130-210-1-239.sslip.io`) at deployed SHA `7b56b44a4d2e742df0c63341b80e02681f1ad69b`.
 
 - **Run Identifier**: `oracle-postfix-20260906T213502Z` (2026-09-06T21:35:05Z to 2026-09-07T21:38:43Z)
 - **Machine-Readable Artifact**: [`docs/evidence/oracle-postfix-20260906T213502Z.json`](docs/evidence/oracle-postfix-20260906T213502Z.json)
