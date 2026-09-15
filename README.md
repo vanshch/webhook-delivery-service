@@ -22,13 +22,15 @@ GitHub automated CD is currently disabled and is operational polish rather than 
 
 Historical deployment stability was established in a verified 24-hour production soak run (see [Verified 24-Hour Production Soak Evidence](#verified-24-hour-production-soak-evidence)), but historical evidence is kept separate from claims of current availability.
 
+The current deployment at `api.webhookdelivery.dev` passed trusted HTTPS, readiness, and the full end-to-end smoke test on September 16, 2026.
+
 | Resource | Target Endpoint / URL | Description |
 |---|---|---|
-| **Deployment Base URL** | [https://130-210-1-239.sslip.io](https://130-210-1-239.sslip.io) | Target public HTTPS API |
-| **Interactive Docs** | [https://130-210-1-239.sslip.io/docs](https://130-210-1-239.sslip.io/docs) | OpenAPI / Swagger UI |
-| **Readiness Probe** | [https://130-210-1-239.sslip.io/readyz](https://130-210-1-239.sslip.io/readyz) | Verifies Redis connectivity & worker heartbeat |
-| **Liveness Probe** | [https://130-210-1-239.sslip.io/livez](https://130-210-1-239.sslip.io/livez) | Process liveness probe |
-| **Health Check** | [https://130-210-1-239.sslip.io/health](https://130-210-1-239.sslip.io/health) | Process status probe |
+| **Deployment Base URL** | [https://api.webhookdelivery.dev](https://api.webhookdelivery.dev) | Current public HTTPS API |
+| **Interactive Docs** | [https://api.webhookdelivery.dev/docs](https://api.webhookdelivery.dev/docs) | OpenAPI / Swagger UI |
+| **Readiness Probe** | [https://api.webhookdelivery.dev/readyz](https://api.webhookdelivery.dev/readyz) | Verifies Redis connectivity & worker heartbeat |
+| **Liveness Probe** | [https://api.webhookdelivery.dev/livez](https://api.webhookdelivery.dev/livez) | Process liveness probe |
+| **Health Check** | [https://api.webhookdelivery.dev/health](https://api.webhookdelivery.dev/health) | Process status probe |
 
 ---
 
@@ -181,7 +183,7 @@ ALLOWED_TARGET_URL="https://YOUR_RECEIVER_HOST/webhook"
 BODY='{"id":"order-evt-1001","event_type":"order.created","payload":{"order_id":42},"target_url":"'"$ALLOWED_TARGET_URL"'"}'
 SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
 
-curl -X POST "https://130-210-1-239.sslip.io/webhooks" \
+curl -X POST "https://api.webhookdelivery.dev/webhooks" \
   -H "Content-Type: application/json" \
   -H "x-signature: sha256=$SIG" \
   -d "$BODY"
