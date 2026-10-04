@@ -5,7 +5,7 @@ import uuid
 import re
 from fastapi import FastAPI, Request
 from loguru import logger
-from app.routes import webhooks, health, deliveries
+from app.routes import webhooks, health, deliveries, website
 
 app = FastAPI(title="Webhook Delivery Service")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -50,3 +50,4 @@ async def log_requests(request: Request, call_next):
 app.include_router(health.router)
 app.include_router(webhooks.router)
 app.include_router(deliveries.router)
+app.include_router(website.router)

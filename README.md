@@ -1,5 +1,7 @@
 # Webhook Delivery Service
 
+**[Explore the project and delivery playground](https://api.webhookdelivery.dev/)** · [API docs](https://api.webhookdelivery.dev/docs) · [Source](https://github.com/vanshch/webhook-delivery-service)
+
 [![CI](https://github.com/vanshch/webhook-delivery-service/actions/workflows/ci.yml/badge.svg)](https://github.com/vanshch/webhook-delivery-service/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -26,7 +28,7 @@ The current deployment at `api.webhookdelivery.dev` passed trusted HTTPS, readin
 
 | Resource | Target Endpoint / URL | Description |
 |---|---|---|
-| **Deployment Base URL** | [https://api.webhookdelivery.dev](https://api.webhookdelivery.dev) | Current public HTTPS API |
+| **Project Page** | [https://api.webhookdelivery.dev](https://api.webhookdelivery.dev) | Delivery playground, live service checks and engineering evidence |
 | **Interactive Docs** | [https://api.webhookdelivery.dev/docs](https://api.webhookdelivery.dev/docs) | OpenAPI / Swagger UI |
 | **Readiness Probe** | [https://api.webhookdelivery.dev/readyz](https://api.webhookdelivery.dev/readyz) | Verifies Redis connectivity & worker heartbeat |
 | **Liveness Probe** | [https://api.webhookdelivery.dev/livez](https://api.webhookdelivery.dev/livez) | Process liveness probe |
@@ -35,6 +37,8 @@ The current deployment at `api.webhookdelivery.dev` passed trusted HTTPS, readin
 ---
 
 ## Architecture
+
+The [public project page](https://api.webhookdelivery.dev/) is served by the same FastAPI application and API container. Its four delivery walkthroughs use clearly labelled browser-only samples. Readiness and known-event lookup call the real same-origin `/readyz` and `/deliveries/{event_id}` endpoints. No webhook secrets, ingestion controls or privileged replay actions enter the browser. See [website integration](docs/WEBSITE.md) for verification and serving boundaries.
 
 ```mermaid
 flowchart TD

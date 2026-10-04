@@ -35,6 +35,11 @@ jobs:
         pip install -r requirements-dev.txt
     - name: Run pytest
       run: pytest tests/ -v
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Verify public page scenario guarantees
+      run: node --test tests/website_scenarios.test.mjs
 
   build:
     needs: test
