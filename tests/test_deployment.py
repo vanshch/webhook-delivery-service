@@ -1,6 +1,7 @@
 """Focused checks for the production deployment contract."""
 
 import re
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from app.config import Settings
@@ -110,6 +111,16 @@ def test_secret_examples_are_blank_and_smoke_receiver_is_in_image():
         assert re.search(rf"^{name}=\s*$", example, flags=re.MULTILINE)
     dockerignore = _read(".dockerignore")
     assert "!scripts/controlled_receiver.py" in dockerignore
+
+
+def test_deployment_images_exclude_environment_variants_and_backups():
+    excluded = [
+        rule.strip() for rule in _read(".dockerignore").splitlines()
+        if rule.strip() and not rule.startswith(("!", "#"))
+    ]
+    for name in (".env", ".env.example", ".env.local", ".env.production",
+                 ".env.before-domain-20260916"):
+        assert any(fnmatchcase(name, pattern) for pattern in excluded), name
 
 
 def test_worker_concurrency_is_bounded_by_configuration():

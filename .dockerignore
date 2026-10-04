@@ -2,8 +2,7 @@
 .venv
 __pycache__
 *.pyc
-.env
-.env.example
+.env*
 .pytest_cache
 .coverage
 htmlcov
