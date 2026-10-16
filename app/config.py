@@ -1,4 +1,4 @@
-"""Application configuration loaded from environment variables and .env file."""
+"""Application settings loaded from environment variables."""
 
 import hmac
 import ipaddress
@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     max_payload_bytes: int = Field(default=262_144, gt=0, le=10_485_760)
     max_event_type_length: int = Field(default=128, gt=0, le=256)
     max_target_url_length: int = Field(default=2_048, gt=0, le=8_192)
+
+    dns_lookup_timeout_seconds: float = Field(default=2.0, gt=0, le=30.0)
 
     stream_name: str = "webhook_stream"
     consumer_group: str = "webhook_workers"

@@ -87,12 +87,15 @@ flowchart TD
 ### Retries & Dead-Letter Queue (DLQ)
 - **Retry Conditions**: Delivery attempts treat every non-2xx HTTP response (including 3xx redirects because HTTP redirect following is disabled, 4xx client errors, and 5xx server errors), delivery-time target validation failures, HTTP timeouts, and network exceptions as failed attempts eligible for retry.
 - **Retry Schedule**: Exponential backoff with random jitter (`min(2^attempt + jitter, 60.0)` seconds), stored in a Redis sorted set (`webhook_delay_queue`).
-- **Timeout Policy**: Each outbound HTTP attempt has a 5-second client timeout; redirects are not followed.
+- **Timeout Policy**: Target DNS resolution and outbound HTTP delivery have distinct, bounded deadlines:
+  - **DNS Resolution**: A configurable 2.0-second total budget per validation lookup (`DNS_LOOKUP_TIMEOUT_SECONDS`, default: 2.0s). The deadline bounds the caller's wait and releases worker processing capacity immediately, isolating resolution in a dedicated bounded executor pool (`dns_resolver`) so main worker threads are never blocked by stalled lookups. Coroutine resolvers are cancelled upon timeout; cooperative synchronous resolvers are signalled via cancellation events. Transient DNS resolution timeouts or network lookups are retried with exponential backoff and eventually dead-lettered if retries are exhausted (never quarantined solely for temporary DNS failures).
+  - **HTTP Delivery**: Each outbound HTTP attempt has a 5-second client timeout (`httpx.AsyncClient(timeout=5.0)`); redirects are not followed.
 - **DLQ Routing**: After `MAX_RETRY_ATTEMPTS` (default: 5) consecutive delivery failures, events are moved to the `webhook_dlq` list and marked `DEAD`.
 - **Operator Replay**: Dead-lettered events can be inspected and atomically replayed back to the main stream using the protected DLQ CLI.
 
 ### Target Validation & SSRF Protection
-- Target URLs are validated against private, loopback, multicast, and link-local IP spaces. In production, outbound requests are strictly restricted to hostnames listed in `ALLOWED_TARGET_HOSTS`.
+- Target URLs are validated against private, loopback, multicast, link-local, and cloud metadata IP spaces. In production, outbound requests are strictly restricted to hostnames listed in `ALLOWED_TARGET_HOSTS`.
+- Validation is performed both at job ingestion and immediately prior to outbound HTTP delivery (protecting against DNS rebinding). Every resolved address family answer must be valid; any forbidden address causes immediate fail-closed quarantine without initiating an outbound HTTP request.
 
 ### Known Limitations
 - In the historically verified deployment configuration, Redis, the API, and the worker share a single VM; the deployment has persistence and restart policies but no cross-host high availability.

@@ -21,7 +21,13 @@ from app.storage import redis_client
 from app.core import retry
 from app.config import settings
 from app.models import IncomingWebhook, DeliveryState, DeliveryStatus
-from app.core.target_validation import validate_delivery_target
+from app.core.target_validation import (
+    InvalidTargetError,
+    TargetValidationError,
+    TransientDNSError,
+    validate_delivery_target,
+    validate_delivery_target_async,
+)
 from app.core.delivery_state import save_delivery_state
 
 import inspect
@@ -146,16 +152,19 @@ async def deliver_webhook(
     Returns True if successful, False otherwise.
     """
     try:
-        validated_url = await asyncio.to_thread(
-            validate_delivery_target,
+        validated_url = await validate_delivery_target_async(
             target_url,
             environment=settings.environment,
             allowed_target_hosts=settings.allowed_target_hosts,
             max_url_length=settings.max_target_url_length,
+            dns_timeout=settings.dns_lookup_timeout_seconds,
         )
-    except ValueError as e:
-        logger.error(f"Target URL validation failed for webhook {webhook.id}: {e}")
+    except TransientDNSError as e:
+        logger.warning(f"Target URL DNS resolution failed for webhook {webhook.id}: {e}")
         return False
+    except (InvalidTargetError, ValueError) as e:
+        logger.error(f"Target URL validation failed for webhook {webhook.id}: {e}")
+        raise
 
     try:
         payload = {
@@ -235,14 +244,73 @@ async def process_job(
         return
 
     try:
-        target_url = await asyncio.to_thread(
-            validate_delivery_target,
+        target_url = await validate_delivery_target_async(
             raw_target_url,
             environment=settings.environment,
             allowed_target_hosts=settings.allowed_target_hosts,
             max_url_length=settings.max_target_url_length,
+            dns_timeout=settings.dns_lookup_timeout_seconds,
         )
-    except ValueError as e:
+    except TransientDNSError as e:
+        logger.warning(
+            f"Transient DNS resolution failure for webhook {webhook.id}: {e}. Retrying."
+        )
+        attempt_key = f"attempt:{webhook.id}"
+        attempt_val = await _maybe_await(redis_conn.get(attempt_key))
+        attempt_number = int(attempt_val) if attempt_val else 0
+        attempt_number += 1
+        now = datetime.now(timezone.utc)
+        dns_err_str = f"DNS resolution failed: {e}"
+
+        if retry.should_move_to_dlq(attempt_number, settings.max_retry_attempts):
+            logger.error(
+                f"Webhook {webhook.id} exhausted all {settings.max_retry_attempts} retries "
+                f"during DNS resolution. Moving to DLQ."
+            )
+            err_msg = f"Delivery failed after {attempt_number} attempts: {dns_err_str}"
+            state = DeliveryState(
+                event_id=webhook.id,
+                status=DeliveryStatus.DEAD,
+                attempt_count=attempt_number,
+                last_attempt_time=now,
+                last_error=err_msg,
+            )
+            await save_delivery_state(redis_conn, state)
+            dlq_item = {
+                "webhook": webhook.model_dump(mode="json"),
+                "last_attempt": attempt_number,
+                "failed_at": time.time(),
+                "target_url": raw_target_url,
+                "last_error": err_msg,
+            }
+            await _maybe_await(redis_conn.lpush(settings.dlq_key, json.dumps(dlq_item)))
+            await _maybe_await(redis_conn.delete(attempt_key))
+            if stream_msg_id:
+                await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
+        else:
+            backoff_delay = retry.compute_backoff(attempt_number)
+            err_msg = f"Delivery attempt {attempt_number} failed: {dns_err_str}"
+            next_retry_dt = now + timedelta(seconds=backoff_delay)
+            state = DeliveryState(
+                event_id=webhook.id,
+                status=DeliveryStatus.RETRYING,
+                attempt_count=attempt_number,
+                last_attempt_time=now,
+                last_error=err_msg,
+                next_retry_time=next_retry_dt,
+            )
+            await save_delivery_state(redis_conn, state)
+            await _maybe_await(redis_conn.set(attempt_key, str(attempt_number)))
+            retry_time = time.time() + backoff_delay
+            await _maybe_await(redis_conn.zadd(settings.delay_queue_key, {job_json: retry_time}))
+            if stream_msg_id:
+                await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
+            logger.info(
+                f"Webhook {webhook.id} scheduled for retry in {backoff_delay:.2f}s "
+                f"(at {retry_time}) due to transient DNS failure"
+            )
+        return
+    except (InvalidTargetError, ValueError) as e:
         logger.error(f"Target URL validation failed for webhook {webhook.id}: {e}. Moving to quarantine.")
         quarantine_item = {
             "webhook_id": webhook.id,
@@ -263,7 +331,24 @@ async def process_job(
 
     with logger.contextualize(event_id=webhook.id):
         logger.info(f"Processing webhook {webhook.id}, attempt #{attempt_number} to {target_url}")
-        success = await deliver_webhook(webhook, target_url, client)
+        try:
+            success = await deliver_webhook(webhook, target_url, client)
+        except (InvalidTargetError, ValueError) as e:
+            logger.error(
+                f"Target URL delivery-time validation failed for webhook {webhook.id}: {e}. "
+                f"Moving to quarantine."
+            )
+            quarantine_item = {
+                "webhook_id": webhook.id,
+                "job": job_json,
+                "error": f"Invalid target URL: {e}",
+                "quarantined_at": time.time(),
+            }
+            await _maybe_await(redis_conn.lpush(settings.quarantine_queue, json.dumps(quarantine_item)))
+            await _maybe_await(redis_conn.delete(attempt_key))
+            if stream_msg_id:
+                await acknowledge_and_delete(redis_conn, stream_name, consumer_group, stream_msg_id)
+            return
 
         # 4. Handle delivery result & acknowledge stream message AFTER persistence
         now = datetime.now(timezone.utc)
